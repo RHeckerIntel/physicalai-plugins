@@ -1,6 +1,11 @@
 [tool.uv.workspace]
 members = ["packages/*"]
 
+[tool.uv]
+exclude-dependencies = [
+    "opencv-python-headless",
+]
+
 [tool.uv.sources]
 physicalai-studio-plugin = { git = "https://github.com/open-edge-platform/physical-ai-studio.git", subdirectory = "application/plugin", rev = "477bd27f0a3c7b01558fe1a42dbaa333379a8754" }
 physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "8e4021703ef43387a835c6647b993cecc069ca85" }

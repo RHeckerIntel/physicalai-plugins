@@ -38,18 +38,18 @@ DEFAULT_POSITION_KP: Final[tuple[float, ...]] = (240.0, 240.0, 240.0, 240.0, 24.
 DEFAULT_POSITION_KD: Final[tuple[float, ...]] = (5.0, 5.0, 5.0, 5.0, 0.5, 0.5, 0.5, 0.5)
 
 LEFT_JOINT_LIMITS_DEG: Final[dict[str, tuple[float, float]]] = {
-    "joint_1": (-75.0, 75.0),
-    "joint_2": (-90.0, 9.0),
+    "joint_1": (-175.0, 175.0),
+    "joint_2": (-90.0, 90.0),
     "joint_3": (-85.0, 85.0),
     "joint_4": (0.0, 135.0),
     "joint_5": (-85.0, 85.0),
     "joint_6": (-40.0, 40.0),
     "joint_7": (-80.0, 80.0),
-    "gripper": (-65.0, 0.0),
+    "gripper": (0.0, 65.0),
 }
 RIGHT_JOINT_LIMITS_DEG: Final[dict[str, tuple[float, float]]] = {
-    "joint_1": (-75.0, 75.0),
-    "joint_2": (-9.0, 90.0),
+    "joint_1": (-175.0, 175.0),
+    "joint_2": (-90.0, 90.0),
     "joint_3": (-85.0, 85.0),
     "joint_4": (0.0, 135.0),
     "joint_5": (-85.0, 85.0),

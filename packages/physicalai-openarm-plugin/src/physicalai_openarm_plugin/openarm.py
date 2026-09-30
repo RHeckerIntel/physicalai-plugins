@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Literal
@@ -82,6 +83,10 @@ class _OpenArmBase:
             can_data_bitrate=can_data_bitrate,
             response_timeout=response_timeout,
         )
+        # Guards every direct call into `self._transport`: a follower's background
+        # motion loop (see OpenArmFollower) drives it from its own thread while
+        # get_observation() may be called concurrently from the caller's thread.
+        self._transport_lock = threading.Lock()
 
     @staticmethod
     def _make_transport(
@@ -125,7 +130,8 @@ class _OpenArmBase:
         return self._transport.is_connected
 
     def _observation(self) -> OpenArmObservation:
-        states = self._transport.read_states()
+        with self._transport_lock:
+            states = self._transport.read_states()
         positions = np.array([states[name].position for name in self.JOINT_ORDER], dtype=np.float32)
         velocities = np.array([states[name].velocity for name in self.JOINT_ORDER], dtype=np.float32)
         torques = np.array([states[name].torque for name in self.JOINT_ORDER], dtype=np.float32)
@@ -134,7 +140,16 @@ class _OpenArmBase:
 
 @export_config(class_path="physicalai_openarm_plugin.OpenArmFollower")
 class OpenArmFollower(_OpenArmBase):
-    """Direct OpenArm follower with side-specific position safety limits."""
+    """Direct OpenArm follower with side-specific position safety limits.
+
+    Position targets are not written to the motors synchronously. Instead,
+    ``send_action`` hands the clipped target to a background motion loop and
+    returns immediately; the loop ramps the commanded position from wherever
+    it currently is to the new target over ``goal_time`` seconds, streaming
+    interpolated setpoints at ``control_hz``. This keeps the arm from
+    jumping at full (motor-PD-limited) speed whenever a caller's targets are
+    far apart, without ever blocking the caller.
+    """
 
     def __init__(
         self,
@@ -151,6 +166,7 @@ class OpenArmFollower(_OpenArmBase):
         max_relative_target: float | None = None,
         position_kp: tuple[float, ...] = DEFAULT_POSITION_KP,
         position_kd: tuple[float, ...] = DEFAULT_POSITION_KD,
+        control_hz: float = 200.0,
         _transport: DamiaoSocketCAN | DamiaoSerial | None = None,
     ) -> None:
         if side not in {"left", "right"}:
@@ -161,6 +177,9 @@ class OpenArmFollower(_OpenArmBase):
             raise ValueError(msg)
         if len(position_kp) != self.NUM_JOINTS or len(position_kd) != self.NUM_JOINTS:
             msg = f"position_kp and position_kd must each contain {self.NUM_JOINTS} values"
+            raise ValueError(msg)
+        if not math.isfinite(control_hz) or control_hz <= 0:
+            msg = "control_hz must be a finite positive number"
             raise ValueError(msg)
         super().__init__(
             port,
@@ -179,12 +198,44 @@ class OpenArmFollower(_OpenArmBase):
         self.position_kd = position_kd
         self._limits = LEFT_JOINT_LIMITS_DEG if side == "left" else RIGHT_JOINT_LIMITS_DEG
 
+        self._control_period = 1.0 / control_hz
+        self._motion_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._motion_thread: threading.Thread | None = None
+        self._motion_error: Exception | None = None
+        # All in JOINT_ORDER, degrees. `_commanded` is the loop's current setpoint;
+        # `_traj_start`/`_traj_goal`/`_traj_start_time`/`_traj_goal_time` describe the
+        # in-flight ramp it is interpolating along.
+        self._commanded: np.ndarray | None = None
+        self._traj_start: np.ndarray | None = None
+        self._traj_goal: np.ndarray | None = None
+        self._traj_start_time = 0.0
+        self._traj_goal_time = 0.0
+
     def connect(self) -> None:
-        """Connect, validate all eight motors, and enable follower torque."""
+        """Connect, validate all eight motors, and start the motion loop."""
         self._transport.connect()
+        with self._transport_lock:
+            states = self._transport.read_states()
+        commanded = np.array([states[name].position for name in self.JOINT_ORDER], dtype=np.float64)
+        with self._motion_lock:
+            self._commanded = commanded
+            self._traj_start = commanded.copy()
+            self._traj_goal = commanded.copy()
+            self._traj_start_time = time.monotonic()
+            self._traj_goal_time = 0.0
+            self._motion_error = None
+        if self._motion_thread is None or not self._motion_thread.is_alive():
+            self._stop_event.clear()
+            self._motion_thread = threading.Thread(target=self._motion_loop, daemon=True)
+            self._motion_thread.start()
 
     def disconnect(self) -> None:
-        """Release the CAN transport, disabling torque by default."""
+        """Stop the motion loop and release the CAN transport, disabling torque by default."""
+        self._stop_event.set()
+        if self._motion_thread is not None:
+            self._motion_thread.join(timeout=1.0)
+            self._motion_thread = None
         self._transport.disconnect(disable_torque=self.disable_torque_on_disconnect)
 
     def get_observation(self) -> RobotObservation:
@@ -192,27 +243,70 @@ class OpenArmFollower(_OpenArmBase):
         return self._observation()
 
     def send_action(self, action: np.ndarray, *, goal_time: float = 0.1) -> None:
-        """Clip and send a full 8-element degree position target vector."""
-        _ = goal_time
+        """Clip a full 8-element degree position target and hand it to the motion loop.
+
+        Returns immediately without touching the transport. The background
+        motion loop ramps toward ``action`` over ``goal_time`` seconds
+        (``0`` requests an immediate jump, matched at the next control tick).
+        """
         if action.shape != (self.NUM_JOINTS,):
             msg = f"Expected action shape ({self.NUM_JOINTS},), got {action.shape}"
             raise ValueError(msg)
         if not np.isfinite(action).all():
             msg = "OpenArm actions must contain only finite values"
             raise ValueError(msg)
-        current = self._transport.read_states() if self.max_relative_target is not None else None
-        commands: dict[str, tuple[float, float, float]] = {}
+        if not math.isfinite(goal_time) or goal_time < 0:
+            msg = "goal_time must be a finite, non-negative number"
+            raise ValueError(msg)
+        if self._motion_error is not None:
+            raise self._motion_error
+        with self._motion_lock:
+            reference = self._commanded
+        if reference is None:
+            msg = "OpenArmFollower must be connected before sending actions"
+            raise RuntimeError(msg)
+
         max_relative_target = self.max_relative_target
+        target = np.empty(self.NUM_JOINTS, dtype=np.float64)
         for index, name in enumerate(self.JOINT_ORDER):
             lower, upper = self._limits[name]
-            target = float(np.clip(action[index], lower, upper))
-            if current is not None and max_relative_target is not None:
-                position = current[name].position
-                target = float(
-                    np.clip(target, position - max_relative_target, position + max_relative_target),
+            value = float(np.clip(action[index], lower, upper))
+            if max_relative_target is not None:
+                value = float(
+                    np.clip(value, reference[index] - max_relative_target, reference[index] + max_relative_target),
                 )
-            commands[name] = (self.position_kp[index], self.position_kd[index], target)
-        self._transport.send_positions(commands)
+            target[index] = value
+
+        with self._motion_lock:
+            self._traj_start = self._commanded if self._commanded is not None else reference
+            self._traj_goal = target
+            self._traj_start_time = time.monotonic()
+            self._traj_goal_time = goal_time
+
+    def _motion_loop(self) -> None:
+        """Stream interpolated setpoints toward the latest goal at ``control_hz``."""
+        while not self._stop_event.is_set():
+            tick_start = time.perf_counter()
+            with self._motion_lock:
+                start, goal = self._traj_start, self._traj_goal
+                start_time, goal_time = self._traj_start_time, self._traj_goal_time
+            if goal is not None:
+                fraction = 1.0 if goal_time <= 0 else min(1.0, (time.monotonic() - start_time) / goal_time)
+                commanded = start + fraction * (goal - start)
+                commands = {
+                    name: (self.position_kp[index], self.position_kd[index], float(commanded[index]))
+                    for index, name in enumerate(self.JOINT_ORDER)
+                }
+                try:
+                    with self._transport_lock:
+                        self._transport.send_positions(commands)
+                except Exception as error:  # noqa: BLE001 - surfaced to the caller via send_action
+                    self._motion_error = error
+                    return
+                with self._motion_lock:
+                    self._commanded = commanded
+            elapsed = time.perf_counter() - tick_start
+            self._stop_event.wait(max(0.0, self._control_period - elapsed))
 
 
 @export_config(class_path="physicalai_openarm_plugin.OpenArmLeader")
