@@ -7,8 +7,7 @@ exclude-dependencies = [
 ]
 
 [tool.uv.sources]
-physicalai-studio-plugin = { git = "https://github.com/open-edge-platform/physical-ai-studio.git", subdirectory = "application/plugin", rev = "477bd27f0a3c7b01558fe1a42dbaa333379a8754" }
-physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "8e4021703ef43387a835c6647b993cecc069ca85" }
+physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "0ad4548e1455a9b6a79aa870ae2529f411739433" }
 
 [dependency-groups]
 dev = ["pytest", "mypy", "ruff>=0.15.14", "prek", "pyrefly>=0.58.0"]
