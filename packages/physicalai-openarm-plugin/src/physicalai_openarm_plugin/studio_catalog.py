@@ -21,6 +21,7 @@ from physicalai_studio_plugin import (
 from pydantic import BaseModel, Field, model_validator
 
 from physicalai_openarm_plugin import get_urdf_path
+from physicalai_openarm_plugin.constants import OPENARM_JOINT_ORDER
 from physicalai_openarm_plugin.bimanual import BimanualOpenArmFollower, BimanualOpenArmLeader
 from physicalai_openarm_plugin.openarm import OpenArmFollower, OpenArmLeader
 
@@ -33,12 +34,17 @@ if TYPE_CHECKING:
         def register_robot(self, definition: RobotCatalogDefinition) -> None: ...
 
 
+# Canonical joint names in motor order: joint N drives URDF ``openarm_jointN``.
+_ARM_JOINTS = OPENARM_JOINT_ORDER[:-1]
+
 _SINGLE_JOINT_MAP = {
-    **{f"joint_{index}.pos": [f"openarm_joint{index}"] for index in range(1, 8)},
+    **{f"{name}.pos": [f"openarm_joint{index}"] for index, name in enumerate(_ARM_JOINTS, start=1)},
     "gripper.pos": ["openarm_finger_joint1", "openarm_finger_joint2"],
 }
 _BIMANUAL_JOINT_MAP = {
-    f"{side}_joint_{index}.pos": [f"openarm_{side}_joint{index}"] for side in ("left", "right") for index in range(1, 8)
+    f"{side}_{name}.pos": [f"openarm_{side}_joint{index}"]
+    for side in ("left", "right")
+    for index, name in enumerate(_ARM_JOINTS, start=1)
 }
 _BIMANUAL_JOINT_MAP.update({
     f"{side}_gripper.pos": [f"openarm_{side}_finger_joint1", f"openarm_{side}_finger_joint2"]

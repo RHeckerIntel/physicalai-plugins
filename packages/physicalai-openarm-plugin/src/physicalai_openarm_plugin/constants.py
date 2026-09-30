@@ -5,26 +5,26 @@ from __future__ import annotations
 from typing import Final
 
 OPENARM_JOINT_ORDER: Final[tuple[str, ...]] = (
-    "joint_1",
-    "joint_2",
-    "joint_3",
-    "joint_4",
-    "joint_5",
-    "joint_6",
-    "joint_7",
+    "shoulder_pitch",
+    "shoulder_roll",
+    "shoulder_yaw",
+    "elbow",
+    "wrist_yaw",
+    "wrist_pitch",
+    "wrist_roll",
     "gripper",
 )
 NUM_OPENARM_JOINTS: Final[int] = len(OPENARM_JOINT_ORDER)
 NUM_BIMANUAL_OPENARM_JOINTS: Final[int] = NUM_OPENARM_JOINTS * 2
 
 OPENARM_MOTOR_CONFIG: Final[dict[str, tuple[int, int, str]]] = {
-    "joint_1": (0x01, 0x11, "dm8009"),
-    "joint_2": (0x02, 0x12, "dm8009"),
-    "joint_3": (0x03, 0x13, "dm4340"),
-    "joint_4": (0x04, 0x14, "dm4340"),
-    "joint_5": (0x05, 0x15, "dm4310"),
-    "joint_6": (0x06, 0x16, "dm4310"),
-    "joint_7": (0x07, 0x17, "dm4310"),
+    "shoulder_pitch": (0x01, 0x11, "dm8009"),
+    "shoulder_roll": (0x02, 0x12, "dm8009"),
+    "shoulder_yaw": (0x03, 0x13, "dm4340"),
+    "elbow": (0x04, 0x14, "dm4340"),
+    "wrist_yaw": (0x05, 0x15, "dm4310"),
+    "wrist_pitch": (0x06, 0x16, "dm4310"),
+    "wrist_roll": (0x07, 0x17, "dm4310"),
     "gripper": (0x08, 0x18, "dm4310"),
 }
 
@@ -38,23 +38,23 @@ DEFAULT_POSITION_KP: Final[tuple[float, ...]] = (240.0, 240.0, 240.0, 240.0, 24.
 DEFAULT_POSITION_KD: Final[tuple[float, ...]] = (5.0, 5.0, 5.0, 5.0, 0.5, 0.5, 0.5, 0.5)
 
 LEFT_JOINT_LIMITS_DEG: Final[dict[str, tuple[float, float]]] = {
-    "joint_1": (-175.0, 175.0),
-    "joint_2": (-90.0, 90.0),
-    "joint_3": (-85.0, 85.0),
-    "joint_4": (0.0, 135.0),
-    "joint_5": (-85.0, 85.0),
-    "joint_6": (-40.0, 40.0),
-    "joint_7": (-80.0, 80.0),
+    "shoulder_pitch": (-175.0, 175.0),
+    "shoulder_roll": (-90.0, 90.0),
+    "shoulder_yaw": (-85.0, 85.0),
+    "elbow": (0.0, 135.0),
+    "wrist_yaw": (-85.0, 85.0),
+    "wrist_pitch": (-40.0, 40.0),
+    "wrist_roll": (-80.0, 80.0),
     "gripper": (0.0, 65.0),
 }
 RIGHT_JOINT_LIMITS_DEG: Final[dict[str, tuple[float, float]]] = {
-    "joint_1": (-175.0, 175.0),
-    "joint_2": (-90.0, 90.0),
-    "joint_3": (-85.0, 85.0),
-    "joint_4": (0.0, 135.0),
-    "joint_5": (-85.0, 85.0),
-    "joint_6": (-40.0, 40.0),
-    "joint_7": (-80.0, 80.0),
+    "shoulder_pitch": (-175.0, 175.0),
+    "shoulder_roll": (-90.0, 90.0),
+    "shoulder_yaw": (-85.0, 85.0),
+    "elbow": (0.0, 135.0),
+    "wrist_yaw": (-85.0, 85.0),
+    "wrist_pitch": (-40.0, 40.0),
+    "wrist_roll": (-80.0, 80.0),
     "gripper": (-65.0, 0.0),
 }
 

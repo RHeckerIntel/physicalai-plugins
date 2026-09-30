@@ -56,9 +56,9 @@ def test_follower_uses_fixed_order_and_clips_right_limits() -> None:
 
     assert follower.joint_names == list(OPENARM_JOINT_ORDER)
     assert observation.joint_positions.tolist() == list(range(8))
-    assert transport.commands["joint_1"][2] == 75.0
-    assert transport.commands["joint_2"][2] == -9.0
-    assert transport.commands["joint_4"][2] == 135.0
+    assert transport.commands["shoulder_pitch"][2] == 75.0
+    assert transport.commands["shoulder_roll"][2] == -9.0
+    assert transport.commands["elbow"][2] == 135.0
     assert transport.commands["gripper"][2] == 0.0
     follower.disconnect()
 
@@ -83,12 +83,12 @@ def test_follower_ramps_toward_target_over_goal_time() -> None:
 
     follower.send_action(np.full(8, 20.0, dtype=np.float32), goal_time=0.2)
     time.sleep(0.05)
-    partial = transport.commands["joint_1"][2]
+    partial = transport.commands["shoulder_pitch"][2]
     # Still ramping: not yet at the far-future target, but has moved off the start.
     assert 0.0 < partial < 20.0
 
     time.sleep(0.2)
-    assert transport.commands["joint_1"][2] == 20.0
+    assert transport.commands["shoulder_pitch"][2] == 20.0
     follower.disconnect()
 
 
@@ -98,8 +98,8 @@ def test_follower_relative_target_and_action_validation() -> None:
     follower.connect()
     follower.send_action(np.full(8, 50.0, dtype=np.float32), goal_time=0.01)
     time.sleep(_SETTLE_S)
-    assert transport.commands["joint_1"][2] == 2.0
-    assert transport.commands["joint_4"][2] == 5.0
+    assert transport.commands["shoulder_pitch"][2] == 2.0
+    assert transport.commands["elbow"][2] == 5.0
     with pytest.raises(ValueError, match="Expected action"):
         follower.send_action(np.zeros(7, dtype=np.float32))
     with pytest.raises(ValueError, match="goal_time"):
@@ -125,10 +125,10 @@ def test_bimanual_follower_splits_actions_and_rejects_shared_bus() -> None:
     robot.connect()
     robot.send_action(np.arange(16, dtype=np.float32), goal_time=0.01)
     time.sleep(_SETTLE_S)
-    assert robot.joint_names[0] == "left_joint_1"
-    assert robot.joint_names[8] == "right_joint_1"
-    assert left_transport.commands["joint_1"][2] == 0.0
-    assert right_transport.commands["joint_1"][2] == 8.0
+    assert robot.joint_names[0] == "left_shoulder_pitch"
+    assert robot.joint_names[8] == "right_shoulder_pitch"
+    assert left_transport.commands["shoulder_pitch"][2] == 0.0
+    assert right_transport.commands["shoulder_pitch"][2] == 8.0
     with pytest.raises(ValueError, match="distinct"):
         BimanualOpenArmFollower(
             OpenArmFollower("can2", side="left", _transport=FakeTransport()),
@@ -168,7 +168,7 @@ def test_bimanual_leader_retargets_ker_angles_left_then_right() -> None:
     assert stream.commands == [CMD_STREAM]
     positions = leader.get_observation().joint_positions
     assert positions.shape == (16,)
-    assert leader.joint_names[0] == "left_joint_1"
+    assert leader.joint_names[0] == "left_shoulder_pitch"
     assert positions[:7].tolist() == left[:7]
     assert positions[8:15].tolist() == right[:7]
     assert positions[7] == pytest.approx(25.0)

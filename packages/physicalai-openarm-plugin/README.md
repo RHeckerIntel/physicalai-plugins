@@ -52,7 +52,7 @@ recommended path until an adapter-specific hardware acceptance test succeeds.
 Positions are **degrees**, in this fixed order:
 
 ```text
-joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7, gripper
+shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_yaw, wrist_pitch, wrist_roll, gripper
 ```
 
 Followers require `side: left` or `side: right`; the plugin applies the

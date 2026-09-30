@@ -214,23 +214,23 @@ class PoseEstimator:
         trunk_down = pt(hip) - sp if hip[2] >= self.min_score else np.array([0.0, -1.0])
         _ = shoulder_width  # reserved for a future depth/foreshortening estimate
 
-        # joint_1: in-plane swing of the upper arm away from straight-down.
+        # shoulder_pitch (joint 1): in-plane swing of the upper arm away from straight-down.
         # Positive x (image-right) is +yaw for the left arm, -yaw for the right arm.
         yaw = float(np.degrees(np.arctan2(upper[0], -upper[1])))
         if side == "right":
             yaw = -yaw
 
-        # joint_2: elevation of the upper arm from the resting (hanging) pose.
+        # shoulder_roll (joint 2): elevation of the upper arm from the resting (hanging) pose.
         # The two sides use opposite sign conventions in the URDF limits.
         elevation = _angle_between(upper, trunk_down)
         pitch = -elevation if side == "left" else elevation
 
-        # joint_4: elbow flexion. 0 = straight arm, grows as the forearm folds in.
+        # elbow (joint 4): elbow flexion. 0 = straight arm, grows as the forearm folds in.
         interior = _angle_between(sp - ep, wp - ep)
         elbow = 180.0 - interior
 
         gripper = abs(self.gripper) if side == "left" else -abs(self.gripper)
-        values = {"joint_1": yaw, "joint_2": pitch, "joint_4": elbow, "gripper": gripper}
+        values = {"shoulder_pitch": yaw, "shoulder_roll": pitch, "elbow": elbow, "gripper": gripper}
         return self._clip_to_limits(values, side)
 
     def _clip_to_limits(self, values: dict[str, float], side: str) -> np.ndarray:
