@@ -1,23 +1,27 @@
 # ruff: noqa: DOC201, DOC501, PLR6301, S101, UP046
 
-"""Bimanual composition for direct OpenArm drivers."""
+"""Bimanual OpenArm drivers: paired CAN followers and a KER exoskeleton leader."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 import numpy as np
+from openarm_ker.ker_stream import CMD_STREAM, KERStream
 from physicalai.config import export_config
 
-from physicalai_openarm_plugin.constants import NUM_BIMANUAL_OPENARM_JOINTS, NUM_OPENARM_JOINTS
-from physicalai_openarm_plugin.openarm import OpenArmFollower, OpenArmLeader, OpenArmObservation
+from physicalai_openarm_plugin.constants import NUM_BIMANUAL_OPENARM_JOINTS, NUM_OPENARM_JOINTS, OPENARM_JOINT_ORDER
+from physicalai_openarm_plugin.ker import KerTeleopProcessor
+from physicalai_openarm_plugin.openarm import OpenArmFollower, OpenArmObservation
 
 if TYPE_CHECKING:
     from physicalai.capture.frame import Frame
     from physicalai.robot.interface import RobotObservation
 
-ArmT = TypeVar("ArmT", OpenArmFollower, OpenArmLeader)
+ArmT = TypeVar("ArmT", bound=OpenArmFollower)
+KerTransport = Literal["usb", "serial"]
 
 
 @dataclass
@@ -119,15 +123,93 @@ class BimanualOpenArmFollower(_BimanualOpenArm[OpenArmFollower]):
 
 
 @export_config(class_path="physicalai_openarm_plugin.BimanualOpenArmLeader")
-class BimanualOpenArmLeader(_BimanualOpenArm[OpenArmLeader]):
-    """Two read-only hand-guided OpenArm leaders."""
+class BimanualOpenArmLeader:
+    """Read-only bimanual leader driven by a KER exoskeleton over ``KERStream``.
 
-    def __init__(self, left: OpenArmLeader, right: OpenArmLeader) -> None:
-        """Initialize the paired leader drivers."""
-        super().__init__(left, right)
+    The KER device streams 16 encoder angles (right arm then left arm), which
+    are filtered and retargeted onto the same left-then-right 16-joint layout
+    that ``BimanualOpenArmFollower`` accepts as its action.
+    """
+
+    NUM_JOINTS = NUM_BIMANUAL_OPENARM_JOINTS
+
+    def __init__(
+        self,
+        *,
+        transport: KerTransport = "usb",
+        port: str = "/dev/ttyACM0",
+        use_hampel: bool = False,
+        first_frame_timeout: float = 2.0,
+        _stream: KERStream | None = None,
+    ) -> None:
+        """Configure the KER stream; the device is not opened until ``connect``."""
+        if transport not in {"usb", "serial"}:
+            msg = "transport must be 'usb' or 'serial'"
+            raise ValueError(msg)
+        if first_frame_timeout <= 0:
+            msg = "first_frame_timeout must be positive"
+            raise ValueError(msg)
+        self._transport = transport
+        self._port = port
+        self._first_frame_timeout = first_frame_timeout
+        self._stream = _stream or KERStream(transport=transport, port=port)
+        self._processor = KerTeleopProcessor(use_hampel=use_hampel)
+        self._connected = False
+
+    @property
+    def joint_names(self) -> list[str]:
+        """Left then right prefixed canonical joint names."""
+        return [f"left_{name}" for name in OPENARM_JOINT_ORDER] + [f"right_{name}" for name in OPENARM_JOINT_ORDER]
+
+    @property
+    def device_ids(self) -> tuple[str, ...]:
+        """Stable identity of the exclusively owned KER device."""
+        if self._transport == "usb":
+            return ("openarm-ker:usb",)
+        return (f"openarm-ker:serial:{self._port}",)
+
+    def connect(self) -> None:
+        """Open the KER device, start streaming, and wait for the first frame."""
+        self._stream.connect()
+        try:
+            self._stream.send_command(CMD_STREAM)
+            self._wait_for_first_frame()
+        except Exception:
+            self._stream.close()
+            raise
+        self._connected = True
+
+    def _wait_for_first_frame(self) -> None:
+        deadline = time.monotonic() + self._first_frame_timeout
+        while self._stream.latest() is None:
+            if time.monotonic() > deadline:
+                msg = f"No data from KER device within {self._first_frame_timeout:g}s"
+                raise TimeoutError(msg)
+            time.sleep(0.01)
+
+    def disconnect(self) -> None:
+        """Put the KER device in standby and release it."""
+        self._connected = False
+        self._stream.close()
+
+    def is_connected(self) -> bool:
+        """Return whether the KER stream session is open."""
+        return self._connected and self._stream.is_connected
+
+    def get_observation(self) -> RobotObservation:
+        """Return the retargeted left-then-right joint targets in degrees."""
+        if not self._stream.is_link_up:
+            msg = "KER device link is down"
+            raise RuntimeError(msg)
+        data = self._stream.latest()
+        if data is None:
+            msg = "No data received from KER device"
+            raise RuntimeError(msg)
+        left, right = self._processor.process(data["angles"])
+        return BimanualOpenArmObservation(np.concatenate((left, right)), time.monotonic())
 
     def send_action(self, action: np.ndarray, *, goal_time: float = 0.1) -> None:
-        """Reject feedback writes because OpenArm leaders are read-only."""
+        """Reject feedback writes because the KER leader is read-only."""
         _ = action, goal_time
-        msg = "Cannot send actions to OpenArm leaders. Bilateral feedback is not implemented."
+        msg = "Cannot send actions to the KER leader. Bilateral feedback is not implemented."
         raise RuntimeError(msg)

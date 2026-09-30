@@ -4,6 +4,7 @@ import time
 
 import numpy as np
 import pytest
+from openarm_ker.ker_stream import CMD_STREAM
 
 from physicalai_openarm_plugin.bimanual import BimanualOpenArmFollower, BimanualOpenArmLeader
 from physicalai_openarm_plugin.constants import OPENARM_JOINT_ORDER
@@ -129,5 +130,59 @@ def test_bimanual_follower_splits_actions_and_rejects_shared_bus() -> None:
     assert left_transport.commands["joint_1"][2] == 0.0
     assert right_transport.commands["joint_1"][2] == 8.0
     with pytest.raises(ValueError, match="distinct"):
-        BimanualOpenArmLeader(OpenArmLeader("can2"), OpenArmLeader("can2"))
+        BimanualOpenArmFollower(
+            OpenArmFollower("can2", side="left", _transport=FakeTransport()),
+            OpenArmFollower("can2", side="right", _transport=FakeTransport()),
+        )
     robot.disconnect()
+
+
+class FakeKERStream:
+    def __init__(self, angles: list[float] | None) -> None:
+        self.angles = angles
+        self.is_connected = False
+        self.is_link_up = False
+        self.commands: list[bytes] = []
+
+    def connect(self) -> None:
+        self.is_connected = self.is_link_up = True
+
+    def send_command(self, cmd: bytes) -> None:
+        self.commands.append(cmd)
+
+    def latest(self) -> dict[str, list[float]] | None:
+        return None if self.angles is None else {"angles": self.angles}
+
+    def close(self) -> None:
+        self.is_connected = self.is_link_up = False
+
+
+def test_bimanual_leader_retargets_ker_angles_left_then_right() -> None:
+    right = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -30.0]
+    left = [11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 30.0]
+    stream = FakeKERStream(right + left)
+    leader = BimanualOpenArmLeader(_stream=stream)
+    leader.connect()
+
+    assert leader.is_connected()
+    assert stream.commands == [CMD_STREAM]
+    positions = leader.get_observation().joint_positions
+    assert positions.shape == (16,)
+    assert leader.joint_names[0] == "left_joint_1"
+    assert positions[:7].tolist() == left[:7]
+    assert positions[8:15].tolist() == right[:7]
+    assert positions[7] == pytest.approx(25.0)
+    assert positions[15] == pytest.approx(-25.0)
+    with pytest.raises(RuntimeError, match="KER leader"):
+        leader.send_action(np.zeros(16, dtype=np.float32))
+
+    leader.disconnect()
+    assert not leader.is_connected()
+
+
+def test_bimanual_leader_connect_times_out_without_frames() -> None:
+    stream = FakeKERStream(None)
+    leader = BimanualOpenArmLeader(first_frame_timeout=0.05, _stream=stream)
+    with pytest.raises(TimeoutError, match="No data"):
+        leader.connect()
+    assert not stream.is_connected

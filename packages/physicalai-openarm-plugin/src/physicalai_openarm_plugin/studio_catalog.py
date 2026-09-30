@@ -125,7 +125,21 @@ class BimanualOpenArmPayload(BaseModel):
         return self
 
 
-class OpenArmProbe(RobotProbe[OpenArmPayload | BimanualOpenArmPayload]):
+class KerLeaderPayload(BaseModel):
+    """KER exoskeleton leader settings for bimanual OpenArm teleoperation."""
+
+    transport: Literal["usb", "serial"] = "usb"
+    port: str = Field(  # pyrefly: ignore [no-matching-overload]
+        default="/dev/ttyACM0",
+        json_schema_extra=robot_field_ui({"advanced_configuration": True}),
+    )
+    use_hampel: bool = Field(  # pyrefly: ignore [no-matching-overload]
+        default=False,
+        json_schema_extra=robot_field_ui({"advanced_configuration": True}),
+    )
+
+
+class OpenArmProbe(RobotProbe[OpenArmPayload | BimanualOpenArmPayload | KerLeaderPayload]):
     """SocketCAN cannot be safely auto-discovered through Studio's serial scanner."""
 
     async def discover(self, manager: PortScanner) -> list[SerialPortInfo]:
@@ -135,14 +149,18 @@ class OpenArmProbe(RobotProbe[OpenArmPayload | BimanualOpenArmPayload]):
 
     async def identify(
         self,
-        payload: OpenArmPayload | BimanualOpenArmPayload,
+        payload: OpenArmPayload | BimanualOpenArmPayload | KerLeaderPayload,
         manager: object | None = None,
         joint: str | None = None,
     ) -> None:
         """Do not send motion commands as a catalog identify action."""
         _ = self, payload, manager, joint
 
-    async def is_online(self, payload: OpenArmPayload | BimanualOpenArmPayload, manager: object | None = None) -> bool:
+    async def is_online(
+        self,
+        payload: OpenArmPayload | BimanualOpenArmPayload | KerLeaderPayload,
+        manager: object | None = None,
+    ) -> bool:
         """Require explicit connection validation rather than probing live motors."""
         _ = self, payload, manager
         return False
@@ -188,11 +206,9 @@ async def _build_leader(robot: PayloadContainer[OpenArmPayload], factory: Catalo
     return await _build_single(robot, factory, role="leader")
 
 
-async def _build_bimanual(
+async def _build_bimanual_follower(
     robot: PayloadContainer[BimanualOpenArmPayload],
     factory: CatalogRobotFactory,
-    *,
-    role: Literal["follower", "leader"],
 ) -> PhysicalAIRobot:
     _ = factory
     payload = BimanualOpenArmPayload.model_validate(robot.payload)
@@ -203,11 +219,6 @@ async def _build_bimanual(
         "can_bitrate": payload.can_bitrate,
         "can_data_bitrate": payload.can_data_bitrate,
     }
-    if role == "leader":
-        return BimanualOpenArmLeader(
-            OpenArmLeader(payload.left_port, **shared),
-            OpenArmLeader(payload.right_port, **shared),
-        )
     return BimanualOpenArmFollower(
         OpenArmFollower(
             payload.left_port,
@@ -226,18 +237,13 @@ async def _build_bimanual(
     )
 
 
-async def _build_bimanual_follower(
-    robot: PayloadContainer[BimanualOpenArmPayload],
-    factory: CatalogRobotFactory,
-) -> PhysicalAIRobot:
-    return await _build_bimanual(robot, factory, role="follower")
-
-
 async def _build_bimanual_leader(
-    robot: PayloadContainer[BimanualOpenArmPayload],
+    robot: PayloadContainer[KerLeaderPayload],
     factory: CatalogRobotFactory,
 ) -> PhysicalAIRobot:
-    return await _build_bimanual(robot, factory, role="leader")
+    _ = factory
+    payload = KerLeaderPayload.model_validate(robot.payload)
+    return BimanualOpenArmLeader(transport=payload.transport, port=payload.port, use_hampel=payload.use_hampel)
 
 
 def _definitions() -> list[RobotCatalogDefinition]:
@@ -277,9 +283,10 @@ def _definitions() -> list[RobotCatalogDefinition]:
             display_name="Bimanual OpenArm Leader",
             role="leader",
             robot_builder=_build_bimanual_leader,
-            robot_payload=BimanualOpenArmPayload,
+            robot_payload=KerLeaderPayload,
             asset=_BIMANUAL_ASSET,
-            adapter_options=RobotAdapterOptions(include_velocities=True, external_effort_gain=None),
+            # The KER device reports angles only, no joint velocities.
+            adapter_options=RobotAdapterOptions(include_velocities=False, external_effort_gain=None),
             probe=_PROBE,
         ),
     ]
